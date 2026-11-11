@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>STM32 모터 파워(%) 및 인코더 위치 제어기</title>
+  <style>
+    * { box-sizing: border-box; font-family: '맑은 고딕', 'Malgun Gothic', sans-serif; }
+    body {
+      background: #f0f2f5;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .main-wrapper {
+      display: flex;
+      gap: 18px;
+      max-width: 1240px;
+      width: 100%;
+      align-items: stretch;
+    }
+    .container {
+      width: 500px;
+      flex-shrink: 0;
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      padding: 20px 22px;
+    }
+    .graph-container {
+      flex: 1;
+      min-width: 540px;
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+    }
+    h1 {
+      font-size: 19px;
+      margin: 0 0 14px 0;
+      color: #1a202c;
+      text-align: center;
+    }
+    .card {
+      border: 1px solid #d8dee9;
+      border-radius: 8px;
+      padding: 13px 15px;
+      margin-bottom: 12px;
+      background: #fafbfc;
+    }
+    .card-title {
+      font-size: 14.5px;
+      font-weight: 700;
+      color: #2d3748;
+      margin-bottom: 10px;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .row:last-child { margin-bottom: 0; }
+    label {
+      font-size: 13.5px;
+      color: #333;
+      min-width: 150px;
+    }
+    input[type="number"] {
+      width: 125px;
+      padding: 7px 9px;
+      font-size: 15px;
+      text-align: center;
+      border: 1px solid #cbd5e0;
+      border-radius: 6px;
+    }
+    button {
+      padding: 8px 12px;
+      font-size: 13.5px;
+      font-weight: 700;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.9; }
+    .btn-primary { background: #2563eb; color: #fff; flex: 1; }
+    .btn-inc     { background: #0284c7; color: #fff; flex: 1; }
+    .btn-reset   { background: #dc2626; color: #fff; min-width: 135px; padding: 10px 12px; }
+    .btn-target  { background: #16a34a; color: #fff; flex: 1; }
+    .btn-stop    { background: #374151; color: #fff; width: 100%; padding: 10px; margin-top: 6px; }
+    .btn-mode    { background: #7c3aed; color: #fff; padding: 7px 14px; font-size: 13px; }
+    .btn-sm      { background: #e2e8f0; color: #1e293b; padding: 7px 12px; font-size: 12.5px; }
+    .btn-sm:hover { background: #cbd5e1; }
+    .enc-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 8px;
+      padding: 10px 12px;
+      flex: 1;
+    }
+    .enc-current {
+      font-size: 20px;
+      font-weight: 800;
+      color: #1d4ed8;
+    }
+    .status-line {
+      font-size: 13px;
+      color: #4b5563;
+      margin-top: 5px;
+    }
+    .conn-badge {
+      font-size: 12.5px;
+      color: #6b7280;
+      margin-left: 4px;
+    }
+    .graph-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .legend-bar {
+      display: flex;
+      gap: 14px;
+      align-items: center;
+      flex-wrap: wrap;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px 14px;
+      margin-bottom: 10px;
+      font-size: 13.5px;
+      font-weight: 700;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .line-swatch-blue {
+      width: 22px;
+      height: 4px;
+      background: #2563eb;
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .line-swatch-red-dashed {
+      width: 22px;
+      height: 0;
+      border-top: 3px dashed #dc2626;
+      display: inline-block;
+    }
+    .line-swatch-red-solid {
+      width: 22px;
+      height: 4px;
+      background: #dc2626;
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .canvas-wrap {
+      flex: 1;
+      position: relative;
+      min-height: 390px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: #ffffff;
+      overflow: hidden;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    @media (max-width: 1024px) {
+      .main-wrapper { flex-direction: column; align-items: center; }
+      .container, .graph-container { width: 100%; min-width: unset; }
+    }
+  </style>
+</head>
+<body>
+  <div class="main-wrapper">
+    <!-- 왼쪽: 입력창 및 제어 버튼 영역 -->
+    <div class="container">
+      <h1>STM32 모터 파워(%) 및 인코더 위치 제어기</h1>
+
+      <!-- 0. 시리얼 연결 -->
+      <div class="card">
+        <div class="card-title">STM32 시리얼 포트 연결 (115200 bps)</div>
+        <div class="row">
+          <button class="btn-primary" id="btnConnect" onclick="toggleSerial()" style="max-width: 165px;">
+            COM 포트 연결
+          </button>
+          <span class="conn-badge" id="connStatus">미연결 (자체 시뮬레이션 모드)</span>
+        </div>
+      </div>
+
+      <!-- 1. 모터 파워 (%) 입력 -->
+      <div class="card">
+        <div class="card-title">1. 모터 파워 (%) 입력</div>
+        <div class="row">
+          <label for="inpPower">모터 파워 (0 ~ 100%) :</label>
+          <input type="number" id="inpPower" min="0" max="100" value="50" />
+          <span style="font-weight:700;">%</span>
+          <button class="btn-primary" onclick="applyPower()">파워 적용</button>
+        </div>
+      </div>
+
+      <!-- 2. 입력한 만큼 인코더 값 증가 및 리셋 -->
+      <div class="card">
+        <div class="card-title">2. 입력한 만큼 인코더 값 증가 및 리셋</div>
+        <div class="row">
+          <label for="inpInc">증가할 인코더 값 입력 :</label>
+          <input type="number" id="inpInc" value="356" />
+          <button class="btn-inc" onclick="moveRelative()">입력한 만큼 증가 ▲</button>
+        </div>
+        <div class="row" style="margin-top: 10px;">
+          <div class="enc-box">
+            <div class="enc-current" id="lblCurEnc">현재 인코더 값 : 0</div>
+            <div class="status-line" id="lblTgtEnc">목표 인코더 값 : 0 (설정 파워: 50%)</div>
+            <div class="status-line" id="lblState">모터 상태 : 정지 ■</div>
+          </div>
+          <button class="btn-reset" onclick="resetEncoder()">인코더 리셋 (0)</button>
+        </div>
+      </div>
+
+      <!-- 3. 원하는 인코더 값으로 이동 -->
+      <div class="card" style="margin-bottom:0;">
+        <div class="card-title">3. 원하는 인코더 값으로 이동 (절대 위치 이동)</div>
+        <div class="row">
+          <label for="inpTarget">원하는 인코더 값 입력 :</label>
+          <input type="number" id="inpTarget" value="1425" />
+          <button class="btn-target" onclick="moveAbsolute()">원하는 값으로 이동 ▶</button>
+        </div>
+        <button class="btn-stop" onclick="stopMotor()">모터 즉시 정지 (STOP)</button>
+      </div>
+    </div>
+
+    <!-- 오른쪽: 실시간 2차원 그래프 영역 -->
+    <div class="graph-container">
+      <div class="graph-header">
+        <h1 id="graphTitle" style="margin:0; text-align:left;">
+          실시간 2차원 그래프 [모드 1: 현재 인코더 & 목표값 직선]
+        </h1>
+        <div style="display:flex; gap:6px; align-items:center;">
+          <button class="btn-mode" id="btnModeSwitch" onclick="toggleGraphMode()">
+            모드 변경: Duty(%) & 속도 보기 ⇄
+          </button>
+          <button class="btn-sm" id="btnPauseGraph" onclick="togglePauseGraph()">일시정지</button>
+          <button class="btn-sm" onclick="clearGraph()">그래프 지우기</button>
+        </div>
+      </div>
+
+      <div class="legend-bar">
+        <div class="legend-item" style="color:#1d4ed8;">
+          <span class="line-swatch-blue" id="swatchBlue"></span>
+          <span id="legBlue">현재 인코더 값: 0</span>
+        </div>
+        <div class="legend-item" style="color:#dc2626;">
+          <span class="line-swatch-red-dashed" id="swatchRed"></span>
+          <span id="legRed">목표 인코더 값(직선): 0</span>
+        </div>
+        <div class="legend-item" style="color:#334155; margin-left:auto;">
+          <span id="legExtra">오차(목표-현재): 0</span>
+        </div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="encCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const COUNTS_PER_REV = 1425.1; // goBILDA 5202-2402-0051 (50.9:1) 1회전당 인코더 카운트
+
+    let port = null;
+    let writer = null;
+    let reader = null;
+    let rxBuffer = "";
+
+    let currentEncoder = 0;
+    let targetEncoder = 0;
+    let motorPower = 50;
+    let motorMoving = 0;   // 0: 정지, 1: 정방향, 2: 역방향
+    let currentDuty = 0;   // 현재 PWM Duty (0 ~ 100 %)
+    let currentSpeedRpm = 0; // 현재 회전 속도 (RPM, 0 이상)
+    let currentSpeedCps = 0; // 현재 초당 인코더 변화량 (counts/sec, 0 이상)
+
+    let hasBoardDuty = false;
+    let hasBoardSpd  = false;
+    let prevEncForSpd = 0;
+    let prevTimeForSpd = performance.now();
+
+    // 그래프 모드: 'pos' (인코더 위치 & 목표 직선) | 'duty_spd' (빨간색 Duty & 파란색 속도)
+    let graphMode = "pos";
+
+    // 2차원 그래프 데이터 (최근 200 샘플 = 약 10초)
+    const MAX_POINTS = 200;
+    const graphData = [];
+    let graphPaused = false;
+    const startTimeMs = performance.now();
+
+    function computeDutyAndSpeedFallback() {
+      const now = performance.now();
+      const dtSec = (now - prevTimeForSpd) / 1000.0;
+      if (dtSec >= 0.04) {
+        if (!hasBoardSpd) {
+          const dEnc = Math.abs(currentEncoder - prevEncForSpd);
+          const rawCps = dEnc / dtSec;
+          // 부드러운 지수 이동평균 필터 적용 (항상 0 이상)
+          currentSpeedCps = Math.max(0, currentSpeedCps * 0.5 + rawCps * 0.5);
+          if (currentSpeedCps < 1.5 && motorMoving === 0) {
+            currentSpeedCps = 0;
+          }
+          currentSpeedRpm = Math.max(0, (currentSpeedCps / COUNTS_PER_REV) * 60.0);
+        }
+        prevEncForSpd = currentEncoder;
+        prevTimeForSpd = now;
+      }
+
+      if (!hasBoardDuty) {
+        const err = targetEncoder - currentEncoder;
+        if (motorMoving === 0 || motorPower <= 0 || Math.abs(err) <= 2) {
+          currentDuty = 0;
+        } else {
+          let pOut = Math.floor(0.1 * Math.abs(err));
+          if (pOut < 25) pOut = 25;
+          if (pOut > motorPower) pOut = motorPower;
+          currentDuty = pOut;
+        }
+      }
+    }
+
+    function pushGraphSample() {
+      if (graphPaused) return;
+      computeDutyAndSpeedFallback();
+      const tSec = (performance.now() - startTimeMs) / 1000.0;
+      graphData.push({
+        t: tSec,
+        cur: currentEncoder,
+        tgt: targetEncoder,
+        duty: Math.abs(currentDuty),
+        rpm: Math.abs(currentSpeedRpm),
+        cps: Math.abs(currentSpeedCps)
+      });
+      if (graphData.length > MAX_POINTS) {
+        graphData.shift();
+      }
+    }
+
+    function toggleGraphMode() {
+      if (graphMode === "pos") {
+        graphMode = "duty_spd";
+        document.getElementById("graphTitle").textContent =
+          "실시간 2차원 그래프 [모드 2: 빨간색 Duty(%) & 파란색 속도(RPM)]";
+        document.getElementById("btnModeSwitch").textContent =
+          "모드 변경: 인코더 & 목표값 보기 ⇄";
+        document.getElementById("swatchRed").className = "line-swatch-red-solid";
+      } else {
+        graphMode = "pos";
+        document.getElementById("graphTitle").textContent =
+          "실시간 2차원 그래프 [모드 1: 현재 인코더 & 목표값 직선]";
+        document.getElementById("btnModeSwitch").textContent =
+          "모드 변경: Duty(%) & 속도 보기 ⇄";
+        document.getElementById("swatchRed").className = "line-swatch-red-dashed";
+      }
+      updateUI();
+      drawGraph();
+    }
+
+    function clearGraph() {
+      graphData.length = 0;
+      pushGraphSample();
+      drawGraph();
+    }
+
+    function togglePauseGraph() {
+      graphPaused = !graphPaused;
+      document.getElementById("btnPauseGraph").textContent = graphPaused ? "그래프 재개" : "일시정지";
+    }
+
+    function updateUI() {
+      document.getElementById("lblCurEnc").textContent = "현재 인코더 값 : " + currentEncoder;
+      document.getElementById("lblTgtEnc").textContent =
+        "목표 인코더 값 : " + targetEncoder + "   (설정 파워: " + motorPower + "%)";
+
+      if (graphMode === "pos") {
+        const err = targetEncoder - currentEncoder;
+        document.getElementById("legBlue").textContent = "현재 인코더 값 (파란선): " + currentEncoder;
+        document.getElementById("legRed").textContent = "목표 인코더 값 (빨간 직선): " + targetEncoder;
+        document.getElementById("legExtra").textContent = "오차(목표-현재): " + (err > 0 ? "+" + err : err);
+      } else {
+        document.getElementById("legBlue").textContent =
+          "현재 속도 (파란선): " + Math.abs(currentSpeedRpm).toFixed(1) + " RPM (" + Math.round(Math.abs(currentSpeedCps)) + " cps)";
+        document.getElementById("legRed").textContent =
+          "현재 Duty (빨간선): " + Math.abs(currentDuty) + " %";
+        document.getElementById("legExtra").textContent =
+          "인코더: " + currentEncoder + " / 목표: " + targetEncoder;
+      }
+
+      const st = document.getElementById("lblState");
+      if (motorMoving === 1) {
+        st.textContent = "모터 상태 : 정방향 회전 중 ▲ (Duty: " + Math.abs(currentDuty) + "%)";
+        st.style.color = "#047857";
+      } else if (motorMoving === 2) {
+        st.textContent = "모터 상태 : 역방향 회전 중 ▼ (Duty: " + Math.abs(currentDuty) + "%)";
+        st.style.color = "#b45309";
+      } else {
+        st.textContent = "모터 상태 : 정지 ■ (Duty: 0%)";
+        st.style.color = "#4b5563";
+      }
+    }
+
+    function drawGraph() {
+      const canvas = document.getElementById("encCanvas");
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const width = Math.max(300, Math.floor(rect.width));
+      const height = Math.max(260, Math.floor(rect.height));
+
+      if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+      }
+
+      const ctx = canvas.getContext("2d");
+      ctx.save();
+      ctx.scale(dpr, dpr);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, width, height);
+
+      const padLeft = 66;
+      const padRight = graphMode === "duty_spd" ? 62 : 24;
+      const padTop = 26;
+      const padBottom = 38;
+      const plotW = width - padLeft - padRight;
+      const plotH = height - padTop - padBottom;
+
+      const idxToPx = (i) => padLeft + (i / (MAX_POINTS - 1)) * plotW;
+
+      // X축 세로 격자선 및 시간(초) 표시
+      const xSteps = 5;
+      ctx.font = "12px 'Malgun Gothic', sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const tStart = graphData.length > 0 ? graphData[0].t : 0;
+      for (let i = 0; i <= xSteps; i++) {
+        const x = padLeft + (plotW * i) / xSteps;
+        ctx.strokeStyle = "#f1f5f9";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x, padTop);
+        ctx.lineTo(x, padTop + plotH);
+        ctx.stroke();
+
+        const sampleIdx = Math.floor(((MAX_POINTS - 1) * i) / xSteps);
+        let labelSec = (tStart + sampleIdx * 0.05).toFixed(1) + "s";
+        if (sampleIdx < graphData.length) {
+          labelSec = graphData[sampleIdx].t.toFixed(1) + "s";
+        }
+        ctx.fillStyle = "#64748b";
+        ctx.fillText(labelSec, x, padTop + plotH + 8);
+      }
+
+      if (graphMode === "pos") {
+        // ================= [모드 1: 인코더 위치 & 목표값 직선] =================
+        let minVal = Math.min(currentEncoder, targetEncoder, 0);
+        let maxVal = Math.max(currentEncoder, targetEncoder, 100);
+        for (const pt of graphData) {
+          if (pt.cur < minVal) minVal = pt.cur;
+          if (pt.cur > maxVal) maxVal = pt.cur;
+          if (pt.tgt < minVal) minVal = pt.tgt;
+          if (pt.tgt > maxVal) maxVal = pt.tgt;
+        }
+
+        let span = maxVal - minVal;
+        if (span < 40) {
+          const mid = (maxVal + minVal) / 2;
+          minVal = mid - 20;
+          maxVal = mid + 20;
+          span = 40;
+        } else {
+          const margin = span * 0.15;
+          minVal -= margin;
+          maxVal += margin;
+          span = maxVal - minVal;
+        }
+
+        const yToPx = (val) => padTop + plotH - ((val - minVal) / span) * plotH;
+
+        // 가로 격자선 및 Y축 눈금
+        const ySteps = 5;
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        for (let i = 0; i <= ySteps; i++) {
+          const v = minVal + (span * i) / ySteps;
+          const y = yToPx(v);
+          ctx.strokeStyle = "#e2e8f0";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padLeft, y);
+          ctx.lineTo(padLeft + plotW, y);
+          ctx.stroke();
+
+          ctx.fillStyle = "#475569";
+          ctx.fillText(Math.round(v).toString(), padLeft - 8, y);
+        }
+
+        if (minVal <= 0 && maxVal >= 0) {
+          const y0 = yToPx(0);
+          ctx.strokeStyle = "#94a3b8";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padLeft, y0);
+          ctx.lineTo(padLeft + plotW, y0);
+          ctx.stroke();
+        }
+
+        // 목표 인코더 값 수평 직선 (빨간색 점선)
+        const yTarget = yToPx(targetEncoder);
+        ctx.save();
+        ctx.strokeStyle = "#dc2626";
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([8, 5]);
+        ctx.beginPath();
+        ctx.moveTo(padLeft, yTarget);
+        ctx.lineTo(padLeft + plotW, yTarget);
+        ctx.stroke();
+        ctx.restore();
+
+        // 목표값 라벨 태그
+        ctx.fillStyle = "rgba(220, 38, 38, 0.9)";
+        const tgtText = "목표값: " + targetEncoder;
+        ctx.font = "bold 12px 'Malgun Gothic', sans-serif";
+        const tgtTextW = ctx.measureText(tgtText).width + 12;
+        const tagY = Math.max(padTop + 10, Math.min(padTop + plotH - 10, yTarget));
+        ctx.fillRect(padLeft + 8, tagY - 11, tgtTextW, 20);
+        ctx.fillStyle = "#ffffff";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(tgtText, padLeft + 14, tagY - 1);
+
+        // 현재 인코더 값 곡선 (파란색 실선)
+        if (graphData.length > 0) {
+          ctx.save();
+          ctx.beginPath();
+          for (let i = 0; i < graphData.length; i++) {
+            const x = idxToPx(i);
+            const y = yToPx(graphData[i].cur);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          const lastX = idxToPx(graphData.length - 1);
+          ctx.lineTo(lastX, padTop + plotH);
+          ctx.lineTo(padLeft, padTop + plotH);
+          ctx.closePath();
+          ctx.fillStyle = "rgba(37, 99, 235, 0.08)";
+          ctx.fill();
+          ctx.restore();
+
+          ctx.strokeStyle = "#2563eb";
+          ctx.lineWidth = 2.8;
+          ctx.lineJoin = "round";
+          ctx.beginPath();
+          for (let i = 0; i < graphData.length; i++) {
+            const x = idxToPx(i);
+            const y = yToPx(graphData[i].cur);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+
+          const lastPt = graphData[graphData.length - 1];
+          const cx = idxToPx(graphData.length - 1);
+          const cy = yToPx(lastPt.cur);
+
+          ctx.fillStyle = "#2563eb";
+          ctx.beginPath();
+          ctx.arc(cx, cy, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = "#1e40af";
+          ctx.font = "bold 12px 'Malgun Gothic', sans-serif";
+          ctx.textAlign = cx > padLeft + plotW - 70 ? "right" : "left";
+          const offsetX = cx > padLeft + plotW - 70 ? -8 : 8;
+          ctx.fillText(lastPt.cur.toString(), cx + offsetX, cy - 10);
+        }
+      } else {
+        // ================= [모드 2: 빨간색 Duty(%) & 파란색 속도(RPM)] =================
+        // Y축 범위: 0 이상 양수로만 표현 (기본 0 ~ 100, 초과 시 자동 확장)
+        let minVal = 0;
+        let maxVal = 100;
+        for (const pt of graphData) {
+          const d = Math.abs(pt.duty);
+          const r = Math.abs(pt.rpm);
+          if (d > maxVal) maxVal = d;
+          if (r > maxVal) maxVal = r;
+        }
+        maxVal = Math.max(100, Math.ceil(maxVal / 20) * 20);
+        const span = maxVal - minVal;
+
+        const yToPx = (val) => padTop + plotH - ((Math.max(0, val) - minVal) / span) * plotH;
+
+        // 가로 격자선 및 왼쪽 Y축(파란색: 속도 RPM), 오른쪽 Y축(빨간색: Duty %) 눈금 표시
+        const ySteps = 5;
+        ctx.textBaseline = "middle";
+        for (let i = 0; i <= ySteps; i++) {
+          const v = minVal + (span * i) / ySteps;
+          const y = yToPx(v);
+          ctx.strokeStyle = v === 0 ? "#94a3b8" : "#e2e8f0";
+          ctx.lineWidth = v === 0 ? 1.4 : 1;
+          ctx.beginPath();
+          ctx.moveTo(padLeft, y);
+          ctx.lineTo(padLeft + plotW, y);
+          ctx.stroke();
+
+          // 왼쪽 축: 파란색 속도 (RPM)
+          ctx.fillStyle = "#1d4ed8";
+          ctx.font = "bold 11.5px 'Malgun Gothic', sans-serif";
+          ctx.textAlign = "right";
+          ctx.fillText(Math.round(v) + " RPM", padLeft - 6, y);
+
+          // 오른쪽 축: 빨간색 Duty (%)
+          ctx.fillStyle = "#dc2626";
+          ctx.textAlign = "left";
+          ctx.fillText(Math.round(v) + "%", padLeft + plotW + 6, y);
+        }
+
+        if (graphData.length > 0) {
+          // 1) 빨간색 선: Duty (%)
+          ctx.strokeStyle = "#dc2626";
+          ctx.lineWidth = 2.6;
+          ctx.lineJoin = "round";
+          ctx.beginPath();
+          for (let i = 0; i < graphData.length; i++) {
+            const x = idxToPx(i);
+            const y = yToPx(Math.abs(graphData[i].duty));
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+
+          // 2) 파란색 선: 속도 (RPM)
+          ctx.strokeStyle = "#2563eb";
+          ctx.lineWidth = 2.8;
+          ctx.lineJoin = "round";
+          ctx.beginPath();
+          for (let i = 0; i < graphData.length; i++) {
+            const x = idxToPx(i);
+            const y = yToPx(Math.abs(graphData[i].rpm));
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+
+          // 최신 포인트 점 & 수치 표시
+          const lastPt = graphData[graphData.length - 1];
+          const lastDuty = Math.abs(lastPt.duty);
+          const lastRpm  = Math.abs(lastPt.rpm);
+          const cx = idxToPx(graphData.length - 1);
+          const cyDuty = yToPx(lastDuty);
+          const cyRpm  = yToPx(lastRpm);
+
+          // 빨간색 Duty 포인트
+          ctx.fillStyle = "#dc2626";
+          ctx.beginPath();
+          ctx.arc(cx, cyDuty, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+
+          // 파란색 속도 포인트
+          ctx.fillStyle = "#2563eb";
+          ctx.beginPath();
+          ctx.arc(cx, cyRpm, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.font = "bold 12px 'Malgun Gothic', sans-serif";
+          ctx.textAlign = cx > padLeft + plotW - 95 ? "right" : "left";
+          const offsetX = cx > padLeft + plotW - 95 ? -8 : 8;
+
+          ctx.fillStyle = "#dc2626";
+          ctx.fillText("Duty " + lastDuty + "%", cx + offsetX, cyDuty - 10);
+
+          ctx.fillStyle = "#1e40af";
+          ctx.fillText(lastRpm.toFixed(1) + " RPM", cx + offsetX, cyRpm + 14);
+        }
+      }
+
+      // 그래프 테두리
+      ctx.strokeStyle = "#94a3b8";
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(padLeft, padTop, plotW, plotH);
+
+      ctx.restore();
+    }
+
+    // 직렬화된 명령 전송 큐
+    let writeChain = Promise.resolve();
+    function sendCmd(cmd) {
+      if (!writer) return Promise.resolve();
+      writeChain = writeChain.then(async () => {
+        if (!writer) return;
+        try {
+          const data = new TextEncoder().encode(cmd + "\r\n");
+          await writer.write(data);
+        } catch (e) {}
+      });
+      return writeChain;
+    }
+
+    async function toggleSerial() {
+      if (port) {
+        try {
+          if (reader) { await reader.cancel(); reader = null; }
+          if (writer) { writer.releaseLock(); writer = null; }
+          await port.close();
+        } catch (e) {}
+        port = null;
+        hasBoardDuty = false;
+        hasBoardSpd = false;
+        document.getElementById("btnConnect").textContent = "COM 포트 연결";
+        document.getElementById("connStatus").textContent = "미연결 (시뮬레이션 모드)";
+        document.getElementById("connStatus").style.color = "#6b7280";
+        return;
+      }
+
+      if (!("serial" in navigator)) {
+        alert("Chrome 또는 Edge 브라우저에서 열면 COM 포트 직접 연결이 가능합니다.\n현재는 시뮬레이션 모드로 동작합니다.");
+        return;
+      }
+
+      try {
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        document.getElementById("btnConnect").textContent = "포트 연결 해제";
+        document.getElementById("connStatus").textContent = "STM32 연결됨 (115200 bps)";
+        document.getElementById("connStatus").style.color = "#15803d";
+        prevEncForSpd = currentEncoder;
+        prevTimeForSpd = performance.now();
+        await sendCmd("P:" + motorPower);
+        readLoop();
+      } catch (e) {
+        port = null;
+      }
+    }
+
+    async function readLoop() {
+      const decoder = new TextDecoder();
+      while (port && port.readable) {
+        reader = port.readable.getReader();
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            rxBuffer += decoder.decode(value, { stream: true });
+            let lines = rxBuffer.split(/\r?\n/);
+            rxBuffer = lines.pop();
+            for (const line of lines) {
+              parseTelemetry(line.trim());
+            }
+          }
+        } catch (e) {
+          break;
+        } finally {
+          if (reader) { reader.releaseLock(); reader = null; }
+        }
+      }
+      if (port) {
+        try {
+          if (writer) { writer.releaseLock(); writer = null; }
+          await port.close();
+        } catch (e) {}
+        port = null;
+        hasBoardDuty = false;
+        hasBoardSpd = false;
+        document.getElementById("btnConnect").textContent = "COM 포트 연결";
+        document.getElementById("connStatus").textContent = "연결 끊김 (다시 연결해 주세요)";
+        document.getElementById("connStatus").style.color = "#dc2626";
+      }
+    }
+
+    function parseTelemetry(line) {
+      if (!line.startsWith("STAT:")) return;
+      const parts = line.substring(5).split(",");
+      for (const p of parts) {
+        const [k, v] = p.split("=");
+        const num = parseInt(v, 10);
+        if (isNaN(num)) continue;
+        if (k === "ENC") currentEncoder = num;
+        else if (k === "TGT") targetEncoder = num;
+        else if (k === "PWR") motorPower = num;
+        else if (k === "MOV") motorMoving = num;
+        else if (k === "DUTY") {
+          currentDuty = Math.abs(num);
+          hasBoardDuty = true;
+        } else if (k === "SPD") {
+          currentSpeedCps = Math.abs(num);
+          currentSpeedRpm = (currentSpeedCps / COUNTS_PER_REV) * 60.0;
+          hasBoardSpd = true;
+        }
+      }
+      updateUI();
+    }
+
+    function applyPower() {
+      let pwr = parseInt(document.getElementById("inpPower").value, 10);
+      if (isNaN(pwr)) pwr = 50;
+      if (pwr < 0) pwr = 0;
+      if (pwr > 100) pwr = 100;
+      motorPower = pwr;
+      document.getElementById("inpPower").value = motorPower;
+      sendCmd("P:" + motorPower);
+      updateUI();
+    }
+
+    function moveRelative() {
+      applyPower();
+      const delta = parseInt(document.getElementById("inpInc").value, 10) || 0;
+      targetEncoder = currentEncoder + delta;
+      motorMoving = targetEncoder > currentEncoder ? 1 : (targetEncoder < currentEncoder ? 2 : 0);
+      sendCmd("I:" + delta);
+      updateUI();
+    }
+
+    function resetEncoder() {
+      currentEncoder = 0;
+      targetEncoder = 0;
+      motorMoving = 0;
+      currentDuty = 0;
+      currentSpeedCps = 0;
+      currentSpeedRpm = 0;
+      prevEncForSpd = 0;
+      sendCmd("R");
+      updateUI();
+    }
+
+    function moveAbsolute() {
+      applyPower();
+      const tgt = parseInt(document.getElementById("inpTarget").value, 10) || 0;
+      targetEncoder = tgt;
+      motorMoving = targetEncoder > currentEncoder ? 1 : (targetEncoder < currentEncoder ? 2 : 0);
+      sendCmd("T:" + tgt);
+      updateUI();
+    }
+
+    function stopMotor() {
+      motorMoving = 0;
+      currentDuty = 0;
+      targetEncoder = currentEncoder;
+      sendCmd("S");
+      updateUI();
+    }
+
+    // 50ms 주기 타이머: 시뮬레이션 이동 및 2차원 그래프 실시간 갱신
+    setInterval(() => {
+      if (!port && motorMoving !== 0 && motorPower > 0) {
+        const err = targetEncoder - currentEncoder;
+        if (Math.abs(err) <= 2) {
+          currentEncoder = targetEncoder;
+          motorMoving = 0;
+        } else {
+          const pStep = Math.max(2, Math.min(Math.floor((motorPower * 25) / 100), Math.ceil(Math.abs(err) * 0.15)));
+          if (err > 0) {
+            currentEncoder += pStep;
+            motorMoving = 1;
+          } else {
+            currentEncoder -= pStep;
+            motorMoving = 2;
+          }
+        }
+      }
+      pushGraphSample();
+      updateUI();
+      drawGraph();
+    }, 50);
+
+    window.addEventListener("resize", drawGraph);
+    pushGraphSample();
+    updateUI();
+    drawGraph();
+  </script>
+</body>
+</html>
