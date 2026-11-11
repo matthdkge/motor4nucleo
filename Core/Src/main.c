@@ -34,8 +34,9 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define PWM_PERIOD_DEFAULT  999         /* 1kHz PWM 주기 (0 ~ 999) */
-#define ENCODER_DEADBAND    2           /* P제어 목표 도달 허용 오차 (±2 카운트) */
-#define MIN_MOVE_PWR        25          /* 모터 마찰력을 이기는 최소 구동 파워 (%) */
+#define ENCODER_DEADBAND    2           /* PID 목표 도달 허용 오차 (0 ~ 2 카운트 이내) */
+#define MIN_MOVE_PWR        18          /* 정지 마찰력을 이기는 최소 기동 파워 (%) */
+#define PID_CTRL_PERIOD_MS  2           /* PID 제어 루프 주기 (2ms = 500Hz) */
 #define BKP_MAGIC_VALUE     0xA5A55A5AUL
 /* USER CODE END PD */
 
@@ -65,12 +66,23 @@ volatile uint8_t motor_moving         = 0;    /* 0: 정지, 1: 정방향(CW), 2:
 volatile int32_t current_duty_percent = 0;    /* 현재 실제 출력 Duty (%) : 0 ~ 100 */
 volatile int32_t current_speed_cps    = 0;    /* 현재 인코더 속도 (counts/sec, 0 이상) */
 
-/* P 제어 비례 게인 (Kp): 오차(목표-현재)에 곱해지는 비율 */
-volatile float   p_gain_kp            = 0.1f;
+/* PID 위치 제어 게인 (오버슈트 방지 과감쇠 튜닝)
+ *  - pid_kp: 비례 게인 (오차에 비례한 구동력)
+ *  - pid_ki: 적분 게인 (목표 근처 정지 마찰력 극복 및 잔류 오차 제거)
+ *  - pid_kd: 미분 게인 (접근 속도에 비례한 전자 브레이크 감속으로 목표값 초과 방지)
+ */
+volatile float   pid_kp               = 0.30f;
+volatile float   pid_ki               = 0.04f;
+volatile float   pid_kd               = 0.045f;
+volatile float   p_gain_kp            = 0.30f; /* 하위 호환용 별칭 */
 
-static uint8_t   p_control_active     = 0;    /* P제어 동작 활성화 플래그 */
+static uint8_t   p_control_active     = 0;    /* PID 제어 동작 활성화 플래그 */
+static int8_t    move_start_dir       = 0;    /* 이동 시작 방향 (+1: 정방향, -1: 역방향) */
 static uint8_t   settled_cnt          = 0;    /* 목표 범위 안착 확인 카운터 */
 static uint32_t  last_ctrl_tick       = 0;
+static int32_t   prev_ctrl_encoder    = 0;    /* 직전 PID 제어 주기의 인코더 값 */
+static float     pid_integral         = 0.0f; /* PID 적분항 누적값 */
+static float     pid_vel_filtered     = 0.0f; /* 저역통과 필터링된 인코더 속도 (counts/sec) */
 static int32_t   prev_enc_for_speed   = 0;
 
 static int32_t   prev_inc_input       = 0;
@@ -123,7 +135,7 @@ void Motor_Brake(void)
 }
 
 /**
-  * @brief 모터 완전 정지 및 P제어 종료
+  * @brief 모터 완전 정지 및 PID 제어 종료
   */
 void Motor_Stop(void)
 {
@@ -133,7 +145,10 @@ void Motor_Stop(void)
   motor_moving = 0;
   current_duty_percent = 0;
   p_control_active = 0;
+  move_start_dir = 0;
   settled_cnt = 0;
+  pid_integral = 0.0f;
+  pid_vel_filtered = 0.0f;
 }
 
 void Motor_SetDrive(int8_t dir, int32_t power_percent)
@@ -182,6 +197,16 @@ void Encoder_Update(void)
   {
     current_encoder = now_enc;
     Encoder_SaveBackup(current_encoder);
+
+    /* PID 위치 제어 중 목표 인코더 값에 도달하면 즉시 전자 브레이크를 걸어 목표값 초과(오버슈트) 차단 */
+    if (p_control_active)
+    {
+      if ((move_start_dir > 0 && current_encoder >= target_encoder - ENCODER_DEADBAND) ||
+          (move_start_dir < 0 && current_encoder <= target_encoder + ENCODER_DEADBAND))
+      {
+        Motor_Brake();
+      }
+    }
   }
 }
 
@@ -213,15 +238,29 @@ void Motor_StartAbsoluteMove(int32_t target_counts)
   target_encoder_input = target_counts;
   prev_target_input = target_encoder_input;
 
+  int32_t init_err = target_encoder - current_encoder;
+  if (abs(init_err) <= ENCODER_DEADBAND)
+  {
+    Motor_Brake();
+    Motor_Stop();
+    return;
+  }
+
+  move_start_dir = (init_err > 0) ? 1 : -1;
+  pid_integral = 0.0f;
+  pid_vel_filtered = 0.0f;
+  prev_ctrl_encoder = current_encoder;
+  last_ctrl_tick = HAL_GetTick();
   settled_cnt = 0;
   p_control_active = 1;
 }
 
 /**
-  * @brief P 제어(비례 제어) 위치 제어기
-  *        - 오차(error = target - current)에 비례해 파워를 줄여 감속
-  *        - 만약 목표값을 넘어가면 error 부호가 반대가 되어 역방향으로 되돌아옴
-  *        - 오차가 ±ENCODER_DEADBAND 이내에 안착하면 전자 브레이크 후 정지
+  * @brief PID 위치 제어기 (오버슈트 방지 과감쇠 제어)
+  *        - P항: 남은 거리(오차)에 비례한 추력 생성
+  *        - I항: 목표 근처에서 정지 마찰력으로 멈추는 현상(정상상태 오차) 보정 (Anti-windup 적용)
+  *        - D항: 현재 이동 속도에 비례한 역제동력(-Kd * 속도)을 가해 목표 도달 전 미리 감속/브레이크
+  *        - 목표 인코더 값을 절대 넘어가지 않도록 접근 속도가 안전 감속 곡선을 초과하면 즉시 전자 브레이크 작동
   */
 void Motor_PositionControlStep(void)
 {
@@ -231,7 +270,8 @@ void Motor_PositionControlStep(void)
   }
 
   uint32_t now = HAL_GetTick();
-  if (now - last_ctrl_tick < 5)
+  uint32_t dt_ms = now - last_ctrl_tick;
+  if (dt_ms < PID_CTRL_PERIOD_MS)
   {
     return;
   }
@@ -246,14 +286,26 @@ void Motor_PositionControlStep(void)
     return;
   }
 
+  float dt_sec = (float)dt_ms * 0.001f;
+  int32_t d_enc = current_encoder - prev_ctrl_encoder;
+  prev_ctrl_encoder = current_encoder;
+
+  /* 현재 인코더 속도(counts/sec) 계산 및 저역통과 필터 적용 */
+  float raw_vel = (float)d_enc / dt_sec;
+  pid_vel_filtered = 0.55f * pid_vel_filtered + 0.45f * raw_vel;
+
   int32_t error = target_encoder - current_encoder;
 
-  /* 1. 오차가 허용 범위(±2 카운트) 안에 들어오면 전자 브레이크 걸고 안착 확인 */
-  if (abs(error) <= ENCODER_DEADBAND)
+  /* 1. 목표값에 도달했거나(허용 오차 이내), 이동 방향 기준으로 목표선에 닿으면 즉시 전자 브레이크로 정지 */
+  float abs_vel = (pid_vel_filtered >= 0.0f) ? pid_vel_filtered : -pid_vel_filtered;
+  if (abs(error) <= ENCODER_DEADBAND ||
+      (move_start_dir > 0 && current_encoder >= target_encoder - ENCODER_DEADBAND) ||
+      (move_start_dir < 0 && current_encoder <= target_encoder + ENCODER_DEADBAND))
   {
     Motor_Brake();
+    pid_integral = 0.0f;
     settled_cnt++;
-    if (settled_cnt >= 8) /* 약 40ms 동안 범위 안에 머물면 완전 정지 */
+    if (settled_cnt >= 15 && abs_vel < 15.0f) /* 약 30ms 동안 완전 정지 확인 후 종료 */
     {
       Motor_Stop();
     }
@@ -261,23 +313,58 @@ void Motor_PositionControlStep(void)
   }
   settled_cnt = 0;
 
-  /* 2. P 제어 계산: 출력 파워(%) = Kp * |오차| */
+  /* 2. PID 각 항 계산 (이동 방향 기준 남은 거리와 접근 속도로 계산하여 오버슈트 원천 방지) */
+  float dist_rem = (float)abs(error);
+  float approach_vel = (error > 0) ? pid_vel_filtered : -pid_vel_filtered; /* 목표를 향해 다가가는 속도(+) */
+
+  /* I항: 목표 근처(120 카운트 이내)에서 모터가 마찰로 멈춰 있을 때만 적분 누적 (Anti-windup) */
+  if (dist_rem < 120.0f && approach_vel < 60.0f)
+  {
+    pid_integral += (pid_ki * dist_rem) * dt_sec * 60.0f;
+    if (pid_integral > 25.0f) pid_integral = 25.0f;
+  }
+  else
+  {
+    pid_integral = 0.0f;
+  }
+
+  /* PID 출력 = Kp * 남은거리 + I항 - Kd * 접근속도 */
+  float pid_out = (pid_kp * dist_rem) + pid_integral - (pid_kd * approach_vel);
+
+  /* 3. 접근 속도가 남은 거리 대비 빨라서 pid_out <= 0 이거나, 목표 코앞에서 관성으로 미끄러지는 중이면 전자 브레이크 작동 */
+  if (pid_out <= 0.0f || (dist_rem <= 15.0f && approach_vel > 35.0f))
+  {
+    Motor_Brake();
+    return;
+  }
+
+  int32_t out_pwr = (int32_t)(pid_out + 0.5f);
+
+  /* 4. 모터가 정지 마찰력 때문에 아예 못 움직이고 있을 때(속도 거의 0)만 최소 기동 파워 보장
+   *    이미 움직이고 있는 중에는 낮은 파워까지 부드럽게 감속하도록 그대로 두어 오버슈트 방지 */
+  if (abs_vel < 25.0f && out_pwr < MIN_MOVE_PWR)
+  {
+    out_pwr = MIN_MOVE_PWR;
+  }
+
+  /* 5. 목표 근처 감속 구간(80 카운트 이내)에서는 최대 파워를 단계적으로 제한하여 관성 폭주 방지 */
+  int32_t max_allowed_pwr = motor_power_percent;
+  if (dist_rem < 30.0f && max_allowed_pwr > 22)
+  {
+    max_allowed_pwr = 22;
+  }
+  else if (dist_rem < 80.0f && max_allowed_pwr > 32)
+  {
+    max_allowed_pwr = 32;
+  }
+
+  if (out_pwr > max_allowed_pwr)
+  {
+    out_pwr = max_allowed_pwr;
+  }
+
   int8_t dir = (error > 0) ? 1 : -1;
-  int32_t p_out = (int32_t)(p_gain_kp * (float)abs(error));
-
-  /* 3. 모터가 멈추지 않고 움직일 수 있는 최소 파워 보장 */
-  if (p_out < MIN_MOVE_PWR)
-  {
-    p_out = MIN_MOVE_PWR;
-  }
-
-  /* 4. 사용자가 입력한 파워(%)를 최대치로 제한 */
-  if (p_out > motor_power_percent)
-  {
-    p_out = motor_power_percent;
-  }
-
-  Motor_SetDrive(dir, p_out);
+  Motor_SetDrive(dir, out_pwr);
 }
 
 void UART_ProcessCommand(const char *cmd)

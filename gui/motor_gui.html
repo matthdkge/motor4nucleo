@@ -326,13 +326,22 @@
 
       if (!hasBoardDuty) {
         const err = targetEncoder - currentEncoder;
-        if (motorMoving === 0 || motorPower <= 0 || Math.abs(err) <= 2) {
+        const distRem = Math.abs(err);
+        if (motorMoving === 0 || motorPower <= 0 || distRem <= 2) {
           currentDuty = 0;
         } else {
-          let pOut = Math.floor(0.1 * Math.abs(err));
-          if (pOut < 25) pOut = 25;
-          if (pOut > motorPower) pOut = motorPower;
-          currentDuty = pOut;
+          // PID 감속 출력 계산 (오버슈트 방지 D항 감속 반영)
+          let pidOut = Math.round(0.30 * distRem - 0.045 * currentSpeedCps);
+          if (pidOut <= 0) {
+            currentDuty = 0;
+          } else {
+            if (currentSpeedCps < 25 && pidOut < 18) pidOut = 18;
+            let maxAllowed = motorPower;
+            if (distRem < 30 && maxAllowed > 22) maxAllowed = 22;
+            else if (distRem < 80 && maxAllowed > 32) maxAllowed = 32;
+            if (pidOut > maxAllowed) pidOut = maxAllowed;
+            currentDuty = pidOut;
+          }
         }
       }
     }
@@ -868,11 +877,11 @@
         } else {
           const pStep = Math.max(2, Math.min(Math.floor((motorPower * 25) / 100), Math.ceil(Math.abs(err) * 0.15)));
           if (err > 0) {
-            currentEncoder += pStep;
-            motorMoving = 1;
+            currentEncoder = Math.min(targetEncoder, currentEncoder + pStep);
+            motorMoving = currentEncoder >= targetEncoder ? 0 : 1;
           } else {
-            currentEncoder -= pStep;
-            motorMoving = 2;
+            currentEncoder = Math.max(targetEncoder, currentEncoder - pStep);
+            motorMoving = currentEncoder <= targetEncoder ? 0 : 2;
           }
         }
       }
